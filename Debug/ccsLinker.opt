@@ -1,0 +1,13 @@
+--silicon_version=28 
+-g 
+--diag_warning=225 
+--large_memory_model 
+--float_support=fpu32 
+-z 
+-m"maincontrol_dsp.map" 
+--stack_size=0x380 
+--warn_sections 
+-i"C:/Program Files (x86)/Texas Instruments/ccsv4/tools/compiler/c2000/lib" -i"C:/Program Files (x86)/Texas Instruments/ccsv4/tools/compiler/c2000/include" 
+--reread_libs 
+--rom_model 
+"./uart_fpga.obj" "./maincontrol_dsp.obj" "./algrithom.obj" "./MotorCanCtrl.obj" "./DSP2833x_usDelay.obj" "./DSP2833x_Xintf.obj" "./DSP2833x_SysCtrl.obj" "./DSP2833x_Sci.obj" "./DSP2833x_PieVect.obj" "./DSP2833x_PieCtrl.obj" "./DSP2833x_MemCopy.obj" "./DSP2833x_GlobalVariableDefs.obj" "./DSP2833x_ECan.obj" "./DSP2833x_DefaultIsr.obj" "./DSP2833x_DMA.obj" "./DSP2833x_CpuTimers.obj" "./DSP2833x_CodeStartBranch.obj" "./DSP2833x_Adc.obj" "./DSP2833x_ADC_cal.obj" -l"libc.a" -l"rts2800_fpu32.lib" "../28335_RAM_lnk.cmd" "../DSP2833x_Headers_nonBIOS.cmd" 

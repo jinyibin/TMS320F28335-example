@@ -1,0 +1,411 @@
+#include "DSP2833x_Device.h"     // DSP28 Headerfile Include File
+#include "DSP2833x_Examples.h"   // DSP28 Examples Include File
+#include "MotorCanCtrl.h"
+
+
+Uint16 can_failure=0;
+/* enable one mailbox for tx ,and one mailbox for rx */
+void can_rw_with_response_init()
+{
+			/* Configure Mailbox  as a Transmit mailbox */
+		   struct ECAN_REGS ECanaShadow;
+		   ECanaShadow.CANMD.all = ECanaRegs.CANMD.all;
+		   ECanaShadow.CANMD.bit.MD25 = 0;
+		   ECanaRegs.CANMD.all = ECanaShadow.CANMD.all;
+		/* Configure Mailbox  as a Receive mailbox */
+		
+		   ECanaShadow.CANMD.all = ECanaRegs.CANMD.all;
+		   ECanaShadow.CANMD.bit.MD16 = 1;
+		   ECanaRegs.CANMD.all = ECanaShadow.CANMD.all;
+		
+		/* Enable Mailbox */
+		
+		   ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+		   ECanaShadow.CANME.bit.ME25 = 1;
+		   ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+		
+		   ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+		   ECanaShadow.CANME.bit.ME16 = 1;
+		   ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+}
+
+
+// transmit one message and wait until response message arrived 
+// if no reponse message arrived in timeout time,then return error
+unsigned int can_tx_with_response(struct can_frame *tx_frame,struct can_frame *rx_frame)
+{
+	   struct ECAN_REGS ECanaShadow;
+	   unsigned long int time_out_counter=0;
+	   volatile struct MBOX *Mailbox;
+	   
+      /* Disnable Mailbox ,required for writing MSGID */
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME25 = 0;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME16 = 0;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+       
+          
+	   ECanaMboxes.MBOX25.MSGID.all=tx_frame->id;  
+
+       ECanaMboxes.MBOX16.MSGID.all=rx_frame->id;  
+       
+       /* Enable Mailbox */
+
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME25 = 1;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME16 = 1;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+       /* Write to DLC field in Master Control reg of tx mailbox*/
+
+       ECanaMboxes.MBOX25.MSGCTRL.bit.DLC = tx_frame->len;
+
+       /* Write to the mailbox RAM field */
+
+       ECanaMboxes.MBOX25.MDL.all = tx_frame->buf[3]|(tx_frame->buf[2]<<8)|((Uint32)tx_frame->buf[1]<<16)|((Uint32)tx_frame->buf[0]<<24);
+       ECanaMboxes.MBOX25.MDH.all = tx_frame->buf[7]|(tx_frame->buf[6]<<8)|((Uint32)tx_frame->buf[5]<<16)|((Uint32)tx_frame->buf[4]<<24);;
+      
+       while(ECanaRegs.CANRMP.bit.RMP16==1) //clear receive message pending bit before transmit
+       {
+          //clear receive message pending bit 
+          ECanaShadow.CANRMP.all = ECanaRegs.CANRMP.all;
+          ECanaShadow.CANRMP.bit.RMP16 = 1;
+          ECanaRegs.CANRMP.all = ECanaShadow.CANRMP.all;     
+       }
+ 
+       /* Begin transmitting */
+
+       ECanaShadow.CANTRS.all = 0;
+       ECanaShadow.CANTRS.bit.TRS25 = 1;             // Set TRS for mailbox under test
+       ECanaRegs.CANTRS.all = ECanaShadow.CANTRS.all;
+
+       do
+    	{
+      	ECanaShadow.CANTA.all = ECanaRegs.CANTA.all;
+    	} while(ECanaShadow.CANTA.bit.TA25 == 0 );   // Wait for TA5 bit to be set..
+
+       ECanaShadow.CANTA.all = 0;
+       ECanaShadow.CANTA.bit.TA25 = 1;     	         // Clear TA25
+       ECanaRegs.CANTA.all = ECanaShadow.CANTA.all;
+
+       while(ECanaRegs.CANRMP.bit.RMP16==0) //check if response message is arrived
+       {
+          time_out_counter++;
+          if(time_out_counter==1000000)
+             return FAIL;  //no response message
+
+       }
+       
+       while(ECanaRegs.CANRMP.bit.RMP16==1) //if response message is arrived,clear RMP
+       {
+          //clear receive message pending bit 
+          ECanaShadow.CANRMP.all = ECanaRegs.CANRMP.all;
+          ECanaShadow.CANRMP.bit.RMP16 = 1;
+          ECanaRegs.CANRMP.all = ECanaShadow.CANRMP.all;     
+       }
+       
+       Mailbox = &ECanaMboxes.MBOX0 + 16;  
+       rx_frame->buf[0] = Mailbox->MDL.byte.BYTE0; 
+       rx_frame->buf[1] = Mailbox->MDL.byte.BYTE1;  
+       rx_frame->buf[2] = Mailbox->MDL.byte.BYTE2;
+       rx_frame->buf[3] = Mailbox->MDL.byte.BYTE3;
+       rx_frame->buf[4] = Mailbox->MDH.byte.BYTE4; 
+       rx_frame->buf[5] = Mailbox->MDH.byte.BYTE5;  
+       rx_frame->buf[6] = Mailbox->MDH.byte.BYTE6;
+       rx_frame->buf[7] = Mailbox->MDH.byte.BYTE7;
+       //DELAY_US(10000);
+       return SUCCESS;
+}
+
+/*  CAN read data from server which is motor driver for this project*/
+//  return 1 if read success
+//  return 0 if no response message arrived
+//  return errorcode if read aborted by server
+unsigned long int sdo_upload_normal(Uint32 ob_infor,Uint32 *data)
+{
+		struct can_frame sdo_upload_init_response;
+		struct can_frame sdo_upload_init;
+		
+		struct can_frame sdo_upload_segment_response;
+		struct can_frame sdo_upload_segment;
+		unsigned char sdo_ccs,sdo_e,sdo_s,sdo_n;//sdo message control field
+		Uint32 error_code;
+		Uint32 data;
+		
+		int ret=0;
+		sdo_upload_init.id=SDO_ID_CLIENT_TO_SERVER;
+		sdo_upload_init.buf[0]=0x40;
+		sdo_upload_init.buf[1]=(ob_infor)&0xFF;
+		sdo_upload_init.buf[2]=(ob_infor>>8)&0xFF;
+		sdo_upload_init.buf[3]=(ob_infor>>16)&0xFF;	
+	    sdo_upload_init.buf[4]=0x0;
+	    sdo_upload_init.buf[5]=0x0;
+	    sdo_upload_init.buf[6]=0x0;
+	    sdo_upload_init.buf[7]=0x0;        
+		sdo_upload_init.len = 0x8;
+			
+	    sdo_upload_init_response.id=SDO_ID_SERVER_TO_CLIENT;	
+		
+		
+		/*send sdo upload initial request */
+		ret=can_tx_with_response(&sdo_upload_init,&sdo_upload_init_response);
+		
+		if(ret==FAIL)
+		{
+			//printf("sdo upload init failed:no response\n");
+			return FAIL;
+		}
+		/* sdo upload initial reponse check */
+		/* check sdo control field  */
+		sdo_ccs=(sdo_upload_init_response.buf[0]>>5)&0x7;
+		sdo_e=(sdo_upload_init_response.buf[0]>>1)&0x1;
+		sdo_s=sdo_upload_init_response.buf[0]&0x1;
+		sdo_n=(sdo_upload_init_response.buf[0]>>2)&0x3;
+		if((sdo_e==1)&&(sdo_s==1))
+		{
+	    //expedited transfer,the data is already in the data field of response message	
+	    //data length=4-sdo_n
+	       *data=((Uint32)sdo_upload_init_response.buf[7]<<24)|((Uint32)sdo_upload_init_response.buf[6]<<16)|((Uint32)sdo_upload_init_response.buf[5]<<8)|(sdo_upload_init_response.buf[4]);
+	       return SUCCESS; 	
+		}
+	    if(sdo_ccs==4)//sdo abort transfer
+	    {
+	       error_code=((Uint32)sdo_upload_init_response.buf[7]<<24)|((Uint32)sdo_upload_init_response.buf[6]<<16)|((Uint32)sdo_upload_init_response.buf[5]<<8)|(sdo_upload_init_response.buf[4]);
+	       return error_code;
+	    }
+	   
+	   /* sdo upload segment */
+	 	sdo_upload_segment.id=SDO_ID_CLIENT_TO_SERVER;
+		sdo_upload_segment.buf[0]=0x60;
+		//*(unsigned long int *) sdo_upload_segment.buf=0;
+	    //*(unsigned long int *)(sdo_upload_segment.buf+4)=0;
+	    sdo_upload_segment.buf[1]=0;
+	    sdo_upload_segment.buf[2]=0;
+	    sdo_upload_segment.buf[3]=0;
+	    sdo_upload_segment.buf[4]=0;
+	    sdo_upload_segment.buf[5]=0;
+	    sdo_upload_segment.buf[6]=0;
+	    sdo_upload_segment.buf[7]=0;
+	    sdo_upload_segment.len = 0x8;
+	    
+	    sdo_upload_segment_response.id=SDO_ID_SERVER_TO_CLIENT;
+	    /* send sdo upload segment */
+	    ret=can_tx_with_response(&sdo_upload_segment,&sdo_upload_segment_response);
+		
+		if(ret==FAIL)
+		{
+			//printf("sdo upload segment failed:no response\n");
+			return FAIL;
+		} 		
+		
+			
+}
+
+/*  CAN write data to server which is motor driver for this project*/
+//  return 1 if write success
+//  return 0 if no response message arrived
+//  return errorcode if write aborted by server
+unsigned long int sdo_download_normal(Uint32 ob_infor,Uint32  data)
+{
+		struct can_frame sdo_download_init_response;
+		struct can_frame sdo_download_init;
+		
+		//struct can_frame sdo_download_segment_response;
+		//struct can_frame sdo_download_segment;
+		Uint32 sdo_e,sdo_s,sdo_n,sdo_scs;//sdo message control field
+		Uint32 error_code;
+		
+		int ret=0;
+		sdo_e=1;//expedit transfer
+		sdo_n=4-(ob_infor>>24)&0xFF;//caculate data length indicator
+		sdo_s=1;//data size is indicated
+		sdo_download_init.id=SDO_ID_CLIENT_TO_SERVER;
+		sdo_download_init.buf[0]=((Uint32)CCS_INIT_DOWNLOAD<<5)|(sdo_n<<2)|(sdo_e<<1)|sdo_s;
+		sdo_download_init.buf[1]=(ob_infor)&0xFF;
+		sdo_download_init.buf[2]=(ob_infor>>8)&0xFF;
+		sdo_download_init.buf[3]=(ob_infor>>16)&0xFF;	
+	    sdo_download_init.buf[4]=(data)&0xFF;
+	    sdo_download_init.buf[5]=(data>>8)&0xFF;
+	    sdo_download_init.buf[6]=(data>>16)&0xFF;
+	    sdo_download_init.buf[7]=(data>>24)&0xFF;        
+		sdo_download_init.len = 0x8;
+			
+	    sdo_download_init_response.id=SDO_ID_SERVER_TO_CLIENT;	
+		
+		
+		/*send sdo upload initial request */
+		ret=can_tx_with_response(&sdo_download_init,&sdo_download_init_response);
+		
+		if(ret==FAIL)
+		{
+			//printf("sdo upload init failed:no response\n");
+			return FAIL;
+		}
+		/* sdo upload initial reponse check */
+		/* check sdo control field  */
+		sdo_scs=(sdo_download_init_response.buf[0]>>5)&0x7;
+		
+	    if(sdo_scs==SDO_SCS_ABORT)//sdo abort transfer
+	    {
+	       error_code=((Uint32)sdo_download_init_response.buf[7]<<24)|((Uint32)sdo_download_init_response.buf[6]<<16)|((Uint32)sdo_download_init_response.buf[5]<<8)|(sdo_download_init_response.buf[4]);
+	       return error_code;
+	    }
+	   
+	   return SUCCESS;
+		
+		
+}
+
+void canopen_heart_beat_monitor_init()
+{
+		struct ECAN_REGS ECanaShadow;
+	/* Configure Mailbox  as a Receive mailbox */
+	
+	   ECanaShadow.CANMD.all = ECanaRegs.CANMD.all;
+	   ECanaShadow.CANMD.bit.MD19 = 1;
+	   ECanaRegs.CANMD.all = ECanaShadow.CANMD.all;	
+}
+
+Uint16 canopen_heart_beat_monitor()
+{
+	   struct ECAN_REGS ECanaShadow;
+	   unsigned int time_out_counter=0;
+	   volatile struct MBOX *Mailbox;
+	   unsigned char message_length;
+
+	   unsigned char ret;
+	   
+      /* Disnable Mailbox ,required for writing MSGID */
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME19 = 0;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;      
+          
+	   ECanaMboxes.MBOX19.MSGID.all=NMT_ID_HEART_BEAT;   
+       
+       /* Enable Mailbox */
+
+       ECanaShadow.CANME.all = ECanaRegs.CANME.all;
+       ECanaShadow.CANME.bit.ME19 = 1;
+       ECanaRegs.CANME.all = ECanaShadow.CANME.all;
+       
+       while(ECanaRegs.CANRMP.bit.RMP19==0) //check if heart beat message is arrived
+       {
+          time_out_counter++;
+          if(time_out_counter==10000)
+             return FAIL;  //no heart beat message
+
+       }
+       Mailbox = &ECanaMboxes.MBOX0 + 19; 
+       message_length=Mailbox->MSGCTRL.bit.DLC;
+
+       ret = Mailbox->MDL.all&0xFF; 
+
+
+       return ret;
+}
+
+
+ 
+Uint32 canopen_set_object(Uint32 object,Uint32 data)
+{
+	Uint16 ret;
+	Uint16 times=0;
+	for(times=0;times<RW_PROTECTION_TIMES;)
+	{
+		ret=sdo_download_normal(object,data);		
+	    if(ret==SUCCESS)
+	         break£»
+	     else 
+	     {
+	     	if(times==2)
+	     	{
+	     	   can_failure = 1;
+	     	   return FAIL;
+	     	}
+	     	else
+	     	   times++;
+	     }	
+}
+
+Uint32 canopen_get_object(Uint32 object,Uint32 *data)
+{
+	Uint32 data_original;
+	Uint16 ret;
+	Uint16 times=0;
+	
+	for(times=0;times<RW_PROTECTION_TIMES;)
+	{
+		 ret=sdo_upload_normal(object,data);
+	     if(ret==SUCCESS)
+	         break£»
+	     else 
+	     {
+	     	if(times==2)
+	     	{
+	     	   can_failure = 1;
+	     	   return FAIL;
+	     	}
+	     	else
+	     	   times++;
+	     }            
+	}	
+}
+
+Uint32 drive_position_mode_init(struct position_mode_parameter *parameter)
+{
+					  Uint32 old_data,new_data;
+					  Uint16 old_bit;
+					  Uint32 ret;
+					  if(!can_failure)
+					  {
+					  	/* set as position mode  */
+					  	if(canopen_set_object(OBJECT_MODE_OF_OPERATION,MODE_OF_OPERATION_POSITION)==FAIL)
+					        goto UART_ACCESS; 
+					  	
+					  	/* set discrete profile,motor is moving discretely */
+					  	if(canopen_get_object(OBJECT_CONROL_WORD,&old_data)==FAIL)
+					         goto UART_ACCESS;
+					    old_bit=(old_data>>CTRL_WORD_CHANGE_SET_IMMEDIALY)&0x1; //extract bit 5  
+					    if(old_bit!=0)//bit 5 is 1,continuous profile
+					       canopen_set_object(OBJECT_CONROL_WORD,old_data|(0x1<< CTRL_WORD_CHANGE_SET_IMMEDIALY));//set bit 5 as 0
+					     
+					   	/* set acceleration */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->acceleration)==FAIL)
+					         goto UART_ACCESS;         
+					  	
+					  	/* set deceleration */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->deceleration)==FAIL)
+					         goto UART_ACCESS;
+					         
+					    /* set jerk limit */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->jerk_limit)==FAIL)
+					         goto UART_ACCESS;     
+					  	/* set point to point move methods:trajectory or s curve */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->ptp_move_methods)==FAIL)
+					         goto UART_ACCESS;
+					    /* set quick stop deceleration */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->quick_stop_deceleration)==FAIL)
+					         goto UART_ACCESS; 
+					    /* set velocity */
+					   	if(canopen_set_object(OBJECT_CONROL_WORD,parameter->velocity)==FAIL)
+					         goto UART_ACCESS;    
+					  }
+		UART_ACCESS:
+					  if(can_failure)
+					  {
+					  	//add UART access here
+					  } 	
+}
+Uint16 drive_get_control_word(Uint16 parameter)
+{
+	
+}
+Uint16 drive_get_status_word(Uint16 parameter)
+{
+	
+}
